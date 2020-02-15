@@ -1,80 +1,20 @@
 from flask import Blueprint, jsonify, json, request
-import subprocess
 import os
+from ldap3 import Server, Connection, ALL, NTLM, ALL_ATTRIBUTES, ALL_OPERATIONAL_ATTRIBUTES
+from appsettings import Settings
+
 
 users = Blueprint('users', __name__, static_folder='static', template_folder='templates')
 
 
-
-
-@users.route('/users', methods=['POST'])
-def route_users():
-    try:
-        key = request.form['key']
-        expected = os.getenv('KEY')
-        if key != expected:
-            return jsonify({}), 204
-    except Exception as e:
-        return jsonify({}), 204
-
-    cmd = "Get-ADUser -filter {(enabled -eq $true) -and (emailaddress -ne 'null')} " +\
-        "-properties DisplayName, EmailAddress | " +\
-        "select DisplayName, EmailAddress, SamAccountName | ConvertTo-Json -Compress "
-
-    pscmd = 'powershell "' + cmd + '"'
-
-    proc = subprocess.Popen(pscmd, stdout=subprocess.PIPE)
-    output = proc.stdout.read().decode('ASCII')
-    result = json.loads(output)
-
-    return jsonify({'users': result}), 200
-
-
-@users.route('/user-groups', methods=['POST'])
-def route_user_groups():
-    valid_identity = False
-    try:
-        key = request.form['key']
-        expected = os.getenv('KEY')
-        if key != expected:
-            return jsonify({}), 204
-    except Exception as e:
-        return jsonify({}), 204
-        
-    try:
-        identity = request.form['identity']
-        if identity > '':
-            valid_identity = True
-        
-    except Exception as e:
-        return jsonify({}), 204
-
-    if not valid_identity:
-        return jsonify({}), 204 
-    
-    cmd = "Get-ADPrincipalGroupMembership -Identity " +\
-        identity + " | " +\
-        "select name | ConvertTo-Json -Compress "
-
-    pscmd = 'powershell "' + cmd + '"'
-
-    try:
-        proc = subprocess.Popen(pscmd, stdout=subprocess.PIPE)
-        output = proc.stdout.read().decode('ASCII')
-        result = json.loads(output)
-
-        return jsonify({'groups': result}), 200
-    except Exception as e:
-        return jsonify({'exception': 'Error obtaining user groups.' }), 500
-
-
 @users.route('/userinfo', methods=['POST'])
 def route_user_info():
-    result = {
-        'authenticated': False,
-        'parceldocs': False,
-        'parceldocs-admin': False,
-        'user': {}
+
+    results = {
+        'name': '',
+        'admin': False,
+        'user': False,
+        'msg': ''
     }
 
     try:
@@ -87,67 +27,45 @@ def route_user_info():
     except Exception as e:
         return jsonify({}), 204
 
-    cmd = "Get-ADUser -filter {(enabled -eq $true) -and (emailaddress -ne 'null')} " +\
-        "-properties DisplayName, EmailAddress | " +\
-        "select DisplayName, EmailAddress, SamAccountName | ConvertTo-Json -Compress "
+    s = Settings()
+    ad_controller = s.get('ad_controller')
+    ad_domain = s.get('ad_domain')
+    ad_acct = s.get('ad_svc_acct')
+    ad_acct_password = s.get('ad_svc_acct_pw')
+    ad_admin_group = s.get('ad_admin_group')
+    ad_user_group = s.get('ad_user_group')
 
-    pscmd = 'powershell "' + cmd + '"'
+    server = Server(ad_controller, get_info=ALL)
+    searchstr = '(&(objectCategory=user)(objectClass=user)(mail=*)(cn = %s*))' % username
 
-    proc = subprocess.Popen(pscmd, stdout=subprocess.PIPE)
-    users = json.loads(proc.stdout.read().decode('ASCII'))
-    thisuser = None
-    for user in users:
-        if is_in_user_record(username, user):
-            thisuser = user
-            result['user'] = user
-            result['authenticated'] = True
-            break
+    conn = Connection(server, user='{}\\{}'.format(ad_domain, ad_acct), password=ad_acct_password, authentication=NTLM,
+                      auto_bind=True)
+    conn.search('dc={},dc=local'.format(ad_domain), searchstr,
+                attributes=[ALL_ATTRIBUTES, ALL_OPERATIONAL_ATTRIBUTES], )
 
-    if thisuser is None:
-        return jsonify({}), 204
+    groups = ''
+    for e in conn.entries:
+        try:
+            if 'Person' in e.objectCategory[0]:
+                if str(e.name).lower() == username or str(e.mail).lower() == username:
+                    groups = str(e.memberOf)
 
-    identity = thisuser['SamAccountName']
+            is_admin = False
+            is_user = False
 
-    cmd = "Get-ADPrincipalGroupMembership -Identity " +\
-        identity + " | " +\
-        "select name | ConvertTo-Json -Compress "
+            if groups.__len__() > 0:
+                if groups.__contains__(ad_admin_group):
+                    is_admin = True
+                    is_user = True
+                elif groups.__contains__(ad_user_group):
+                    is_user = True
 
-    pscmd = 'powershell "' + cmd + '"'
-
-    try:
-        proc = subprocess.Popen(pscmd, stdout=subprocess.PIPE)
-        groups = json.loads(proc.stdout.read().decode('ASCII'))
-
-        isuser = False
-        isadmin = False
-        for group in groups:
-            if group['name'].lower() == 'parceldocs':
-                isuser = True
-            elif group['name'].lower() == 'parceldocs-admin':
-                isadmin = True
-
-        result['parceldocs'] = (isuser or isadmin)
-        result['parceldocs-admin'] = isadmin
-
-    except Exception as e:
-        return jsonify({'exception': 'Error obtaining user groups.'}), 500
-
-    return jsonify(result), 200
-
-
-def is_in_user_record(name, rec):
-    result = False
-    if not rec['DisplayName'] is None:
-        if rec['DisplayName'].lower() == name:
-            result = True
-
-    if not rec['EmailAddress'] is None:
-        if rec['EmailAddress'].lower() == name:
-            result = True
-
-    if not rec['SamAccountName'] is None:
-        if rec['SamAccountName'].lower() == name:
-            result = True
-
-    return result
+            results['name'] = username
+            results['admin'] = is_admin
+            results['user'] = is_user
+            return jsonify(results), 200
+        except Exception as e:
+            results['name'] = username
+            results['msg'] = str(e)
+            return jsonify(results), 500
 
