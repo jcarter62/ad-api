@@ -14,6 +14,7 @@ class Defaults:
             {'name': 'ad_svc_acct_pw', 'value': ''},
             {'name': 'ad_admin_group', 'value': ''},
             {'name': 'ad_user_group', 'value': ''},
+            {'name': 'api-key', 'value': ''},
         ]
         return
 

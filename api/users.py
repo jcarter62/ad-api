@@ -9,6 +9,7 @@ users = Blueprint('users', __name__, static_folder='static', template_folder='te
 
 @users.route('/userinfo', methods=['POST'])
 def route_user_info():
+    s = Settings()
 
     results = {
         'name': '',
@@ -19,7 +20,7 @@ def route_user_info():
 
     try:
         key = request.form['key']
-        expected = os.getenv('KEY')
+        expected = s.get('api-key')
         if key != expected:
             return jsonify({}), 204
 
@@ -27,7 +28,6 @@ def route_user_info():
     except Exception as e:
         return jsonify({}), 204
 
-    s = Settings()
     ad_controller = s.get('ad_controller')
     ad_domain = s.get('ad_domain')
     ad_acct = s.get('ad_svc_acct')
