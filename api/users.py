@@ -69,3 +69,6 @@ def route_user_info():
             results['msg'] = str(e)
             return jsonify(results), 500
 
+    results['name'] = username
+    results['msg'] ='No Groups'
+    return jsonify(results), 200
